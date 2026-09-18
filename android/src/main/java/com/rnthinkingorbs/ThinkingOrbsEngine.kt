@@ -46,6 +46,8 @@ internal fun orbSizeDotScale(size: Double): Double {
   return 1.55
 }
 
+internal fun thinkingOrbsFit(size: Double): Double = orbFitCached(size, OrbKnobs())
+
 internal fun orbSheetDots(
   phase: Double,
   size: Double,
