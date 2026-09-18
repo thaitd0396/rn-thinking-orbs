@@ -192,7 +192,7 @@ public final class ThinkingOrbsUIView: UIView {
             phase: Float(thinkingOrbsPhase(period: 4.6, speed: 1, reverse: false, startAt: 0, seconds: seconds)),
             size: box,
             fit: cachedFit,
-            dotScale: Float(thinkingOrbsDotScale(Double(box))),
+            dotScale: Float(thinkingOrbsDotScale(size: Double(box))),
             contentsScale: Float(metalLayer.contentsScale),
             pad0: 0,
             viewport: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
