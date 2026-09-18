@@ -197,7 +197,7 @@ private enum OrbSpecs13 {
             let a: Double = orbSin(((4 * s[1]) + (6 * s[0])) - ((TAU * 2) * t))
             let b: Double = orbSin(((4 * s[1]) - (6 * s[0])) + ((TAU * 2) * t))
             let w: Double = cl(((a * b) + 1) / 2)
-            pts.append(rot(OrbVec([p[0], p[1], p[2], 0.5 + (1.3 * w), 0.2 + (0.8 * w), w > 0.9 ? 2 : 1]), TAU * t, 0.36))
+            pts.append(OrbVec([p[0], p[1], p[2], 0.5 + (1.3 * w), 0.2 + (0.8 * w), w > 0.9 ? 2 : 1]))
         }
         P3(pts, S2, K, 0.3)
     }

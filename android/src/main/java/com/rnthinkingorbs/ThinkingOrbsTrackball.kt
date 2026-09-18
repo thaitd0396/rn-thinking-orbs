@@ -5,9 +5,15 @@ import kotlin.math.hypot
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+internal object ThinkingOrbsSpin {
+  const val IDLE_PERIOD = 4.6f
+  val IDLE_SPEED = (2f * Math.PI.toFloat()) / IDLE_PERIOD
+}
+
 /**
  * View-space trackball: the front of the sphere follows the finger.
  * Screen axes are +X right, +Y down, +Z toward the camera.
+ * The rotation axis stays parallel to the phone face (`z = 0`).
  */
 internal class ThinkingOrbsTrackball {
   private var qw = 1f

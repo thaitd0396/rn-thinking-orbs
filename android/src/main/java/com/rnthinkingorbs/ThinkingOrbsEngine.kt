@@ -186,11 +186,7 @@ private fun drawStripes(
     val b = kotlin.math.sin(4 * s[1] - 6 * s[0] + TAU * 2 * t)
     val w = cl((a * b + 1) / 2)
     val spun =
-      rot(
-        doubleArrayOf(p[0], p[1], p[2], 0.5 + 1.3 * w, 0.2 + 0.8 * w, if (w > 0.9) ORB_ACCENT else ORB_DOT),
-        TAU * t,
-        0.36,
-      )
+      doubleArrayOf(p[0], p[1], p[2], 0.5 + 1.3 * w, 0.2 + 0.8 * w, if (w > 0.9) ORB_ACCENT else ORB_DOT)
     pts.add(mulRows(spun, userRotation))
   }
   project(pts, size, k, 0.3)

@@ -51,18 +51,6 @@ enum ThinkingOrbsShader {
         return clamp(u, 0.0, 1.0);
     }
 
-    static float3 rotYawPitch(float3 p, float ay, float ax) {
-        float ca = cos(ay);
-        float sa = sin(ay);
-        float x = p.x * ca - p.z * sa;
-        float z = p.x * sa + p.z * ca;
-        float cb = cos(ax);
-        float sb = sin(ax);
-        float y = p.y * cb - z * sb;
-        z = p.y * sb + z * cb;
-        return float3(x, y, z);
-    }
-
     static Dot makeDot(uint i, constant Uniforms& u) {
         float N = float(kDotCount);
         float y = 1.0 - (float(i) / (N - 1.0)) * 2.0;
@@ -78,7 +66,6 @@ enum ThinkingOrbsShader {
         float scale = 0.5 + 1.3 * w;
         float fade = 0.2 + 0.8 * w;
         float accentAmt = w > 0.9 ? 1.0 : 0.0;
-        p = rotYawPitch(p, TAU * t, 0.36);
         p = float3(dot(u.userR0.xyz, p), dot(u.userR1.xyz, p), dot(u.userR2.xyz, p));
 
         float z = p.z;

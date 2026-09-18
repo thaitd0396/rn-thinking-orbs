@@ -33,8 +33,12 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     private var ink = SIMD4<Float>(0, 0, 0, 1)
     private var colorsDirty = true
     private var userRotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-    private var velocityX: Float = 0
+    /// View-space spin in the same units as `rollSurface` (radians / view-width per second).
+    /// Axis is always parallel to the screen: ω = (-vy, vx, 0).
+    private var velocityX: Float = -ThinkingOrbsSpin.idleSpeed
     private var velocityY: Float = 0
+    private var idleDirX: Float = -1
+    private var idleDirY: Float = 0
     private var lastTouchPoint: CGPoint = .zero
     private var lastTouchAt = CACurrentMediaTime()
     private var lastTickAt = CACurrentMediaTime()
@@ -222,6 +226,7 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
         let dt = Float(max(now - lastTouchAt, 1.0 / 240.0))
         velocityX = dx / dt
         velocityY = dy / dt
+        rememberSpinDirection()
         lastTouchPoint = point
         lastTouchAt = now
         rollSurface(dx: dx, dy: dy)
@@ -257,11 +262,45 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
 
     /// Roll the visible front of the sphere so it follows the finger.
     /// Screen space is +X right, +Y down, +Z toward the camera.
+    /// The rotation axis stays parallel to the phone face (`z = 0`).
     private func rollSurface(dx: Float, dy: Float) {
         let angle = hypot(dx, dy)
         guard angle > 1e-8 else { return }
         let axis = simd_normalize(SIMD3<Float>(-dy, dx, 0))
         userRotation = simd_normalize(simd_quatf(angle: angle, axis: axis) * userRotation)
+    }
+
+    private func rememberSpinDirection() {
+        let speed = hypot(velocityX, velocityY)
+        guard speed > 1e-6 else { return }
+        idleDirX = velocityX / speed
+        idleDirY = velocityY / speed
+    }
+
+    /// Keep spinning in view space around a stable axis parallel to the screen.
+    /// Fast flicks decay toward idle speed without changing axis; then cruise.
+    private func coastSpin(dt: Float) {
+        if animated {
+            rememberSpinDirection()
+            let cruise = ThinkingOrbsSpin.idleSpeed
+            let speed = hypot(velocityX, velocityY)
+            let next = speed > cruise
+                ? cruise + (speed - cruise) * exp(-3 * dt)
+                : cruise
+            velocityX = idleDirX * next
+            velocityY = idleDirY * next
+        } else {
+            let speed = hypot(velocityX, velocityY)
+            if speed < 0.02 {
+                velocityX = 0
+                velocityY = 0
+            } else {
+                let scale = exp(-3 * dt)
+                velocityX *= scale
+                velocityY *= scale
+            }
+        }
+        rollSurface(dx: velocityX * dt, dy: velocityY * dt)
     }
 
     private func userRotationRows() -> (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) {
@@ -295,12 +334,7 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
         let dt = Float(max(now - lastTickAt, 0))
         lastTickAt = now
         if !touching {
-            rollSurface(dx: velocityX * dt, dy: velocityY * dt)
-            let damp = exp(-3 * dt)
-            velocityX *= damp
-            velocityY *= damp
-            if abs(velocityX) < 0.02 { velocityX = 0 }
-            if abs(velocityY) < 0.02 { velocityY = 0 }
+            coastSpin(dt: dt)
         }
         renderFrame()
     }
@@ -327,7 +361,7 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
         let seconds = currentIdleSeconds()
         let rows = userRotationRows()
         var uniforms = ThinkingOrbsGPUUniforms(
-            phase: Float(thinkingOrbsPhase(period: 4.6, speed: 1, reverse: false, startAt: 0, seconds: seconds)),
+            phase: Float(thinkingOrbsPhase(period: Double(ThinkingOrbsSpin.idlePeriod), speed: 1, reverse: false, startAt: 0, seconds: seconds)),
             size: box,
             fit: cachedFit,
             dotScale: Float(thinkingOrbsDotScale(size: Double(box))),
@@ -385,6 +419,11 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
 private enum ThinkingOrbsGPU {
     static let dotCount = 160
     static let bufferCount = 3
+}
+
+private enum ThinkingOrbsSpin {
+    static let idlePeriod: Float = 4.6
+    static let idleSpeed: Float = (2 * Float.pi) / idlePeriod
 }
 
 private struct ThinkingOrbsGPUDot {

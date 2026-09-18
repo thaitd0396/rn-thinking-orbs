@@ -22,18 +22,6 @@ float cl(float u) {
   return clamp(u, 0.0, 1.0);
 }
 
-float3 rotYawPitch(float3 p, float ay, float ax) {
-  float ca = cos(ay);
-  float sa = sin(ay);
-  float x = p.x * ca - p.z * sa;
-  float z = p.x * sa + p.z * ca;
-  float cb = cos(ax);
-  float sb = sin(ax);
-  float y = p.y * cb - z * sb;
-  z = p.y * sb + z * cb;
-  return float3(x, y, z);
-}
-
 half4 main(float2 fragCoord) {
   float N = DOT_COUNT;
   float t = phase;
@@ -56,7 +44,6 @@ half4 main(float2 fragCoord) {
     float scale = 0.5 + 1.3 * w;
     float fade = 0.2 + 0.8 * w;
     float accentAmt = w > 0.9 ? 1.0 : 0.0;
-    p = rotYawPitch(p, TAU * t, 0.36);
     p = float3(dot(userR0, p), dot(userR1, p), dot(userR2, p));
 
     float z = p.z;

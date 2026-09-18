@@ -9,8 +9,8 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
-import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -59,8 +59,10 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
   private var lastFrameNanos = System.nanoTime()
   private var running = false
   private val trackball = ThinkingOrbsTrackball()
-  private var velocityX = 0f
+  private var velocityX = -ThinkingOrbsSpin.IDLE_SPEED
   private var velocityY = 0f
+  private var idleDirX = -1f
+  private var idleDirY = 0f
   private var lastTouchX = 0f
   private var lastTouchY = 0f
   private var dragging = false
@@ -104,9 +106,16 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
       MotionEvent.ACTION_MOVE -> {
         disallowParentIntercept()
         velocityTracker?.addMovement(event)
-        trackball.roll((event.x - lastTouchX) * gain, (event.y - lastTouchY) * gain)
+        val dx = (event.x - lastTouchX) * gain
+        val dy = (event.y - lastTouchY) * gain
+        trackball.roll(dx, dy)
         lastTouchX = event.x
         lastTouchY = event.y
+        val step = hypot(dx, dy)
+        if (step > 1e-8f) {
+          idleDirX = dx / step
+          idleDirY = dy / step
+        }
         invalidate()
         return true
       }
@@ -115,6 +124,7 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
         velocityTracker?.computeCurrentVelocity(1000)
         velocityX = (velocityTracker?.xVelocity ?: 0f) * gain
         velocityY = (velocityTracker?.yVelocity ?: 0f) * gain
+        rememberSpinDirection()
         recycleVelocityTracker()
         dragging = false
         parent?.requestDisallowInterceptTouchEvent(false)
@@ -132,12 +142,7 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     val dt = ((frameTimeNanos - lastFrameNanos).coerceAtLeast(0) / 1_000_000_000.0).toFloat()
     lastFrameNanos = frameTimeNanos
     if (!dragging) {
-      trackball.roll(velocityX * dt, velocityY * dt)
-      val damp = exp(-3f * dt)
-      velocityX *= damp
-      velocityY *= damp
-      if (abs(velocityX) < 0.02f) velocityX = 0f
-      if (abs(velocityY) < 0.02f) velocityY = 0f
+      coastSpin(dt)
     }
     invalidate()
     if (running) {
@@ -154,7 +159,7 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     val originX = ((width - boxPx) / 2f) / density
     val originY = ((height - boxPx) / 2f) / density
     val seconds = currentIdleSeconds()
-    val phase = orbPhase(4.6, 1.0, false, 0.0, seconds)
+    val phase = orbPhase(ThinkingOrbsSpin.IDLE_PERIOD.toDouble(), 1.0, false, 0.0, seconds)
     val userRotation = trackball.matrixRows()
     val renderer = agslRenderer
     if (renderer != null && canvas.isHardwareAccelerated) {
@@ -248,6 +253,42 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
   private fun stop() {
     running = false
     Choreographer.getInstance().removeFrameCallback(this)
+  }
+
+  private fun rememberSpinDirection() {
+    val speed = hypot(velocityX, velocityY)
+    if (speed <= 1e-6f) {
+      return
+    }
+    idleDirX = velocityX / speed
+    idleDirY = velocityY / speed
+  }
+
+  private fun coastSpin(dt: Float) {
+    if (animated) {
+      rememberSpinDirection()
+      val cruise = ThinkingOrbsSpin.IDLE_SPEED
+      val speed = hypot(velocityX, velocityY)
+      val next =
+        if (speed > cruise) {
+          cruise + (speed - cruise) * exp(-3f * dt)
+        } else {
+          cruise
+        }
+      velocityX = idleDirX * next
+      velocityY = idleDirY * next
+    } else {
+      val speed = hypot(velocityX, velocityY)
+      if (speed < 0.02f) {
+        velocityX = 0f
+        velocityY = 0f
+      } else {
+        val scale = exp(-3f * dt)
+        velocityX *= scale
+        velocityY *= scale
+      }
+    }
+    trackball.roll(velocityX * dt, velocityY * dt)
   }
 
   private fun recycleVelocityTracker() {
