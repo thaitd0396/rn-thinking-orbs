@@ -1,0 +1,53 @@
+{
+  "name": "rn-thinking-orbs",
+  "version": "0.1.0",
+  "description": "Native dotted thinking-orbs view for React Native (iOS + Android)",
+  "homepage": "https://github.com/thaitd0396/rn-thinking-orbs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thaitd0396/rn-thinking-orbs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thaitd0396/rn-thinking-orbs/issues"
+  },
+  "main": "./src/index.tsx",
+  "react-native": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "files": [
+    "src",
+    "android",
+    "ios",
+    "*.podspec",
+    "!android/build",
+    "!ios/build",
+    "!**/.*"
+  ],
+  "keywords": [
+    "react-native",
+    "ios",
+    "android",
+    "thinking-orbs"
+  ],
+  "license": "MIT",
+  "author": "thaitd <thaitranbk59@gmail.com> (https://github.com/thaitd0396)",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "codegenConfig": {
+    "name": "RnThinkingOrbsSpec",
+    "type": "components",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "com.rnthinkingorbs"
+    },
+    "ios": {
+      "componentProvider": {
+        "RnThinkingOrbsView": "RnThinkingOrbsView"
+      }
+    }
+  }
+}
