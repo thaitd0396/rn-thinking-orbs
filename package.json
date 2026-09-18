@@ -1,7 +1,7 @@
 {
   "name": "rn-thinking-orbs",
-  "version": "0.1.0",
-  "description": "Native dotted thinking-orbs view for React Native (iOS + Android)",
+  "version": "0.1.1",
+  "description": "Native dotted thinking-orbs view for React Native (Metal on iOS, Canvas on Android)",
   "homepage": "https://github.com/thaitd0396/rn-thinking-orbs",
   "repository": {
     "type": "git",

@@ -1,6 +1,6 @@
 # rn-thinking-orbs
 
-Native React Native view that draws a striped dotted thinking orb with Core Graphics (iOS) and `android.graphics.Canvas` (Android). No Skia.
+Native React Native view that draws a striped dotted thinking orb with a Metal shader (iOS) and `android.graphics.Canvas` (Android). No Skia.
 
 ```tsx
 import {ThinkingOrbsView} from 'rn-thinking-orbs';
@@ -14,6 +14,8 @@ import {ThinkingOrbsView} from 'rn-thinking-orbs';
 ```
 
 Keep the native view at a fixed size (for example 120pt) and scale the wrapper in JS if the layout slot shrinks. Do not change the native canvas size during keyboard or layout animation.
+
+On iOS, a Metal compute shader builds the 160-dot stripe field each frame and a fragment shader draws anti-aliased circles. Android still uses `Canvas`.
 
 Autolinks on iOS and Android. After adding the package, rebuild the native app (`pod install` / Gradle). CodePush cannot ship the native view.
 
