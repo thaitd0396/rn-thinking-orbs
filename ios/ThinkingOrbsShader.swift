@@ -17,6 +17,9 @@ enum ThinkingOrbsShader {
         float2 viewport;
         float2 origin;
         float2 pad1;
+        float4 userR0;
+        float4 userR1;
+        float4 userR2;
         float4 accent;
         float4 ink;
     };
@@ -76,6 +79,7 @@ enum ThinkingOrbsShader {
         float fade = 0.2 + 0.8 * w;
         float accentAmt = w > 0.9 ? 1.0 : 0.0;
         p = rotYawPitch(p, TAU * t, 0.36);
+        p = float3(dot(u.userR0.xyz, p), dot(u.userR1.xyz, p), dot(u.userR2.xyz, p));
 
         float z = p.z;
         float per = 3.5 / (3.5 - z);

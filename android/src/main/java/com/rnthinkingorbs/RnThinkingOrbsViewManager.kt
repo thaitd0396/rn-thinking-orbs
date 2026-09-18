@@ -37,6 +37,11 @@ class RnThinkingOrbsViewManager :
     view?.animated = value
   }
 
+  @ReactProp(name = "interactive", defaultBoolean = false)
+  override fun setInteractive(view: ThinkingOrbsView?, value: Boolean) {
+    view?.interactive = value
+  }
+
   companion object {
     const val NAME = "RnThinkingOrbsView"
 

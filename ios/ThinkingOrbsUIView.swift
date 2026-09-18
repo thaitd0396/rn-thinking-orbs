@@ -1,9 +1,10 @@
 import Metal
 import QuartzCore
+import simd
 import UIKit
 
 @objc(ThinkingOrbsUIView)
-public final class ThinkingOrbsUIView: UIView {
+public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     @objc public var accentColor: String = "#2A67F4" {
         didSet { colorsDirty = true; renderIfVisible() }
     }
@@ -12,6 +13,9 @@ public final class ThinkingOrbsUIView: UIView {
     }
     @objc public var animated: Bool = true {
         didSet { applyPlayback() }
+    }
+    @objc public var interactive: Bool = false {
+        didSet { applyInteraction() }
     }
 
     public override class var layerClass: AnyClass { CAMetalLayer.self }
@@ -23,12 +27,21 @@ public final class ThinkingOrbsUIView: UIView {
     private let uniformBuffers: [MTLBuffer]
     private var bufferIndex = 0
     private var displayLink: CADisplayLink?
-    private var startedAt = CACurrentMediaTime()
     private var cachedFit: Float = 1
     private var cachedFitSize: Double = -1
     private var accent = SIMD4<Float>(0.1647, 0.4039, 0.9569, 1)
     private var ink = SIMD4<Float>(0, 0, 0, 1)
     private var colorsDirty = true
+    private var userRotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private var velocityX: Float = 0
+    private var velocityY: Float = 0
+    private var lastTouchPoint: CGPoint = .zero
+    private var lastTouchAt = CACurrentMediaTime()
+    private var lastTickAt = CACurrentMediaTime()
+    private var idleSeconds: CFTimeInterval = 0
+    private var idleRunningSince: CFTimeInterval?
+    private var touching = false
+    private let grabRecognizer = ThinkingOrbsGrabRecognizer()
 
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
@@ -94,6 +107,11 @@ public final class ThinkingOrbsUIView: UIView {
         isOpaque = false
         isUserInteractionEnabled = false
         backgroundColor = .clear
+        grabRecognizer.addTarget(self, action: #selector(handleGrab))
+        grabRecognizer.delegate = self
+        grabRecognizer.cancelsTouchesInView = true
+        addGestureRecognizer(grabRecognizer)
+        applyInteraction()
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.isOpaque = false
@@ -135,8 +153,13 @@ public final class ThinkingOrbsUIView: UIView {
     }
 
     private func applyPlayback() {
-        startedAt = CACurrentMediaTime()
-        if window != nil, animated {
+        lastTickAt = CACurrentMediaTime()
+        if animated, !touching {
+            resumeIdle()
+        } else {
+            freezeIdle()
+        }
+        if window != nil, (animated || interactive) {
             startAnimating()
         } else {
             stopAnimating()
@@ -146,9 +169,112 @@ public final class ThinkingOrbsUIView: UIView {
         }
     }
 
+    private func applyInteraction() {
+        isUserInteractionEnabled = interactive
+        grabRecognizer.isEnabled = interactive
+        applyPlayback()
+    }
+
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        gestureRecognizer === grabRecognizer
+    }
+
+    @objc private func handleGrab(_ recognizer: UIGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        switch recognizer.state {
+        case .began:
+            grab(at: point)
+        case .changed:
+            roll(to: point)
+        case .ended, .cancelled:
+            releaseGrab()
+        default:
+            break
+        }
+    }
+
+    /// Contact is a grab: idle stops, and a stationary finger is just a pan of distance 0.
+    private func grab(at point: CGPoint) {
+        touching = true
+        velocityX = 0
+        velocityY = 0
+        lastTouchPoint = point
+        lastTouchAt = CACurrentMediaTime()
+        freezeIdle()
+        renderIfVisible()
+    }
+
+    private func roll(to point: CGPoint) {
+        let now = CACurrentMediaTime()
+        let box = max(min(bounds.width, bounds.height), 1)
+        let dx = Float((point.x - lastTouchPoint.x) / box)
+        let dy = Float((point.y - lastTouchPoint.y) / box)
+        let dt = Float(max(now - lastTouchAt, 1.0 / 240.0))
+        velocityX = dx / dt
+        velocityY = dy / dt
+        lastTouchPoint = point
+        lastTouchAt = now
+        rollSurface(dx: dx, dy: dy)
+        renderIfVisible()
+    }
+
+    private func releaseGrab() {
+        guard touching else { return }
+        touching = false
+        if animated {
+            resumeIdle()
+        }
+        applyPlayback()
+    }
+
+    private func currentIdleSeconds() -> CFTimeInterval {
+        if let since = idleRunningSince {
+            return idleSeconds + (CACurrentMediaTime() - since)
+        }
+        return idleSeconds
+    }
+
+    private func freezeIdle() {
+        idleSeconds = currentIdleSeconds()
+        idleRunningSince = nil
+    }
+
+    private func resumeIdle() {
+        guard animated, idleRunningSince == nil else { return }
+        idleSeconds = currentIdleSeconds()
+        idleRunningSince = CACurrentMediaTime()
+    }
+
+    /// Roll the visible front of the sphere so it follows the finger.
+    /// Screen space is +X right, +Y down, +Z toward the camera.
+    private func rollSurface(dx: Float, dy: Float) {
+        let angle = hypot(dx, dy)
+        guard angle > 1e-8 else { return }
+        let axis = simd_normalize(SIMD3<Float>(-dy, dx, 0))
+        userRotation = simd_normalize(simd_quatf(angle: angle, axis: axis) * userRotation)
+    }
+
+    private func userRotationRows() -> (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) {
+        let matrix = simd_float3x3(userRotation)
+        return (
+            SIMD4(matrix.columns.0.x, matrix.columns.1.x, matrix.columns.2.x, 0),
+            SIMD4(matrix.columns.0.y, matrix.columns.1.y, matrix.columns.2.y, 0),
+            SIMD4(matrix.columns.0.z, matrix.columns.1.z, matrix.columns.2.z, 0)
+        )
+    }
+
     private func startAnimating() {
         if displayLink != nil { return }
-        startedAt = CACurrentMediaTime()
         let link = CADisplayLink(target: self, selector: #selector(tick))
         if #available(iOS 15.0, *) {
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
@@ -165,6 +291,17 @@ public final class ThinkingOrbsUIView: UIView {
     }
 
     @objc private func tick() {
+        let now = CACurrentMediaTime()
+        let dt = Float(max(now - lastTickAt, 0))
+        lastTickAt = now
+        if !touching {
+            rollSurface(dx: velocityX * dt, dy: velocityY * dt)
+            let damp = exp(-3 * dt)
+            velocityX *= damp
+            velocityY *= damp
+            if abs(velocityX) < 0.02 { velocityX = 0 }
+            if abs(velocityY) < 0.02 { velocityY = 0 }
+        }
         renderFrame()
     }
 
@@ -187,7 +324,8 @@ public final class ThinkingOrbsUIView: UIView {
         }
 
         let box = Float(min(bounds.width, bounds.height))
-        let seconds = animated ? CACurrentMediaTime() - startedAt : 0
+        let seconds = currentIdleSeconds()
+        let rows = userRotationRows()
         var uniforms = ThinkingOrbsGPUUniforms(
             phase: Float(thinkingOrbsPhase(period: 4.6, speed: 1, reverse: false, startAt: 0, seconds: seconds)),
             size: box,
@@ -197,7 +335,10 @@ public final class ThinkingOrbsUIView: UIView {
             pad0: 0,
             viewport: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
             origin: SIMD2((Float(bounds.width) - box) * 0.5, (Float(bounds.height) - box) * 0.5),
-            pad1: .zero,
+            pad1: SIMD2(0, 0),
+            userR0: rows.0,
+            userR1: rows.1,
+            userR2: rows.2,
             accent: accent,
             ink: ink
         )
@@ -264,6 +405,9 @@ private struct ThinkingOrbsGPUUniforms {
     var viewport: SIMD2<Float>
     var origin: SIMD2<Float>
     var pad1: SIMD2<Float>
+    var userR0: SIMD4<Float>
+    var userR1: SIMD4<Float>
+    var userR2: SIMD4<Float>
     var accent: SIMD4<Float>
     var ink: SIMD4<Float>
 }
@@ -291,4 +435,31 @@ private func simdColor(from hex: String) -> SIMD4<Float> {
         Float(n & 0xFF) / 255,
         1
     )
+}
+
+/// Begins on finger down so a parent scroll/WebView/RN touch handler cannot steal the grab later.
+private final class ThinkingOrbsGrabRecognizer: UIGestureRecognizer {
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard touches.count == 1 else {
+            state = .failed
+            return
+        }
+        state = .began
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else { return }
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else { return }
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .began || state == .changed {
+            state = .cancelled
+        }
+    }
 }

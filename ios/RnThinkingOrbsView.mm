@@ -51,6 +51,9 @@ using namespace facebook::react;
   if (oldViewProps.animated != newViewProps.animated) {
     [_orbsView setValue:@(newViewProps.animated) forKey:@"animated"];
   }
+  if (oldViewProps.interactive != newViewProps.interactive) {
+    [_orbsView setValue:@(newViewProps.interactive) forKey:@"interactive"];
+  }
 
   [super updateProps:props oldProps:oldProps];
 }

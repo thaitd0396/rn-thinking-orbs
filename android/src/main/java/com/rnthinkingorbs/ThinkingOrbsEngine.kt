@@ -53,6 +53,7 @@ internal fun orbSheetDots(
   size: Double,
   dotScale: Double,
   knobs: OrbKnobs = OrbKnobs(),
+  userRotation: FloatArray = IDENTITY_ROTATION,
 ): List<OrbDot> {
   val fit = orbFitCached(size, knobs)
   val half = size / 2
@@ -66,7 +67,7 @@ internal fun orbSheetDots(
       if (fr <= 0.05 || fa <= 0.004) return@OrbSink
       out.add(OrbDot(fx, fy, fr, minOf(1.0, fa), col == ORB_ACCENT))
     }
-  drawStripes(phase, size, sink)
+  drawStripes(phase, size, sink, userRotation)
   return out
 }
 
@@ -97,6 +98,13 @@ private fun nc(count: Double, n: Double): Int {
   return if (v < 1) 1 else v
 }
 
+internal val IDENTITY_ROTATION =
+  floatArrayOf(
+    1f, 0f, 0f,
+    0f, 1f, 0f,
+    0f, 0f, 1f,
+  )
+
 private fun rot(p: DoubleArray, ay: Double, ax: Double): DoubleArray {
   val ca = kotlin.math.cos(ay)
   val sa = kotlin.math.sin(ay)
@@ -106,6 +114,13 @@ private fun rot(p: DoubleArray, ay: Double, ax: Double): DoubleArray {
   val sb = kotlin.math.sin(ax)
   val y = p[1] * cb - z * sb
   z = p[1] * sb + z * cb
+  return doubleArrayOf(x, y, z, p.getOrElse(3) { Double.NaN }, p.getOrElse(4) { Double.NaN }, p.getOrElse(5) { Double.NaN })
+}
+
+private fun mulRows(p: DoubleArray, m: FloatArray): DoubleArray {
+  val x = p[0] * m[0] + p[1] * m[1] + p[2] * m[2]
+  val y = p[0] * m[3] + p[1] * m[4] + p[2] * m[5]
+  val z = p[0] * m[6] + p[1] * m[7] + p[2] * m[8]
   return doubleArrayOf(x, y, z, p.getOrElse(3) { Double.NaN }, p.getOrElse(4) { Double.NaN }, p.getOrElse(5) { Double.NaN })
 }
 
@@ -156,7 +171,12 @@ private fun project(pts: List<DoubleArray>, size: Double, k: OrbSink, rf: Double
   }
 }
 
-private fun drawStripes(t: Double, size: Double, k: OrbSink) {
+private fun drawStripes(
+  t: Double,
+  size: Double,
+  k: OrbSink,
+  userRotation: FloatArray = IDENTITY_ROTATION,
+) {
   val n = nc(160.0, k.n)
   val pts = ArrayList<DoubleArray>(n)
   for (i in 0 until n) {
@@ -165,13 +185,13 @@ private fun drawStripes(t: Double, size: Double, k: OrbSink) {
     val a = kotlin.math.sin(4 * s[1] + 6 * s[0] - TAU * 2 * t)
     val b = kotlin.math.sin(4 * s[1] - 6 * s[0] + TAU * 2 * t)
     val w = cl((a * b + 1) / 2)
-    pts.add(
+    val spun =
       rot(
         doubleArrayOf(p[0], p[1], p[2], 0.5 + 1.3 * w, 0.2 + 0.8 * w, if (w > 0.9) ORB_ACCENT else ORB_DOT),
         TAU * t,
         0.36,
-      ),
-    )
+      )
+    pts.add(mulRows(spun, userRotation))
   }
   project(pts, size, k, 0.3)
 }

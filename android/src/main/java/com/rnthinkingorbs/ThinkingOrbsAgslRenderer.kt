@@ -15,6 +15,7 @@ internal class ThinkingOrbsAgslRenderer {
     contentsScale: Float,
     originX: Float,
     originY: Float,
+    userRotation: FloatArray,
     accent: Int,
     ink: Int,
   ): RuntimeShader {
@@ -24,6 +25,9 @@ internal class ThinkingOrbsAgslRenderer {
     shader.setFloatUniform("dotScale", dotScale)
     shader.setFloatUniform("contentsScale", contentsScale)
     shader.setFloatUniform("origin", originX, originY)
+    shader.setFloatUniform("userR0", userRotation[0], userRotation[1], userRotation[2])
+    shader.setFloatUniform("userR1", userRotation[3], userRotation[4], userRotation[5])
+    shader.setFloatUniform("userR2", userRotation[6], userRotation[7], userRotation[8])
     setColor("accent", accent)
     setColor("ink", ink)
     return shader

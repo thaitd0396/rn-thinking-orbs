@@ -8,6 +8,9 @@ uniform float fit;
 uniform float dotScale;
 uniform float contentsScale;
 uniform float2 origin;
+uniform float3 userR0;
+uniform float3 userR1;
+uniform float3 userR2;
 uniform float4 accent;
 uniform float4 ink;
 
@@ -54,6 +57,7 @@ half4 main(float2 fragCoord) {
     float fade = 0.2 + 0.8 * w;
     float accentAmt = w > 0.9 ? 1.0 : 0.0;
     p = rotYawPitch(p, TAU * t, 0.36);
+    p = float3(dot(userR0, p), dot(userR1, p), dot(userR2, p));
 
     float z = p.z;
     float per = 3.5 / (3.5 - z);

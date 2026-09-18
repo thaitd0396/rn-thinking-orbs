@@ -6,7 +6,13 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.os.Build
 import android.view.Choreographer
+import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
 
 class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCallback {
   init {
@@ -28,7 +34,14 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
   var animated: Boolean = true
     set(value) {
       field = value
-      if (value) start() else stop()
+      syncPlayback()
+      invalidate()
+    }
+  var interactive: Boolean = false
+    set(value) {
+      field = value
+      isClickable = value
+      syncPlayback()
       invalidate()
     }
 
@@ -43,22 +56,89 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     } else {
       null
     }
-  private var startedAtNanos = System.nanoTime()
+  private var lastFrameNanos = System.nanoTime()
   private var running = false
+  private val trackball = ThinkingOrbsTrackball()
+  private var velocityX = 0f
+  private var velocityY = 0f
+  private var lastTouchX = 0f
+  private var lastTouchY = 0f
+  private var dragging = false
+  private var idleSeconds = 0.0
+  private var idleRunningSinceNanos: Long? = null
+  private var velocityTracker: VelocityTracker? = null
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     setWillNotDraw(false)
     importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-    if (animated) start()
+    syncPlayback()
   }
 
   override fun onDetachedFromWindow() {
     stop()
+    recycleVelocityTracker()
     super.onDetachedFromWindow()
   }
 
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (!interactive) {
+      return super.onTouchEvent(event)
+    }
+    val box = max(min(width, height), 1).toFloat()
+    val gain = 1f / box
+    when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        disallowParentIntercept()
+        dragging = true
+        velocityX = 0f
+        velocityY = 0f
+        lastTouchX = event.x
+        lastTouchY = event.y
+        freezeIdle()
+        recycleVelocityTracker()
+        velocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
+        invalidate()
+        return true
+      }
+      MotionEvent.ACTION_MOVE -> {
+        disallowParentIntercept()
+        velocityTracker?.addMovement(event)
+        trackball.roll((event.x - lastTouchX) * gain, (event.y - lastTouchY) * gain)
+        lastTouchX = event.x
+        lastTouchY = event.y
+        invalidate()
+        return true
+      }
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+        velocityTracker?.addMovement(event)
+        velocityTracker?.computeCurrentVelocity(1000)
+        velocityX = (velocityTracker?.xVelocity ?: 0f) * gain
+        velocityY = (velocityTracker?.yVelocity ?: 0f) * gain
+        recycleVelocityTracker()
+        dragging = false
+        parent?.requestDisallowInterceptTouchEvent(false)
+        if (animated) {
+          resumeIdle()
+        }
+        syncPlayback()
+        return true
+      }
+    }
+    return super.onTouchEvent(event)
+  }
+
   override fun doFrame(frameTimeNanos: Long) {
+    val dt = ((frameTimeNanos - lastFrameNanos).coerceAtLeast(0) / 1_000_000_000.0).toFloat()
+    lastFrameNanos = frameTimeNanos
+    if (!dragging) {
+      trackball.roll(velocityX * dt, velocityY * dt)
+      val damp = exp(-3f * dt)
+      velocityX *= damp
+      velocityY *= damp
+      if (abs(velocityX) < 0.02f) velocityX = 0f
+      if (abs(velocityY) < 0.02f) velocityY = 0f
+    }
     invalidate()
     if (running) {
       Choreographer.getInstance().postFrameCallback(this)
@@ -73,9 +153,9 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     val box = (boxPx / density).toDouble()
     val originX = ((width - boxPx) / 2f) / density
     val originY = ((height - boxPx) / 2f) / density
-    val seconds =
-      if (animated) (System.nanoTime() - startedAtNanos) / 1_000_000_000.0 else 0.0
+    val seconds = currentIdleSeconds()
     val phase = orbPhase(4.6, 1.0, false, 0.0, seconds)
+    val userRotation = trackball.matrixRows()
     val renderer = agslRenderer
     if (renderer != null && canvas.isHardwareAccelerated) {
       shaderPaint.shader =
@@ -87,6 +167,7 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
           contentsScale = density,
           originX = originX,
           originY = originY,
+          userRotation = userRotation,
           accent = accentColor,
           ink = dotColor,
         )
@@ -95,7 +176,13 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     }
     val ox = originX * density
     val oy = originY * density
-    val dots = orbSheetDots(phase, box, orbSizeDotScale(box))
+    val dots =
+      orbSheetDots(
+        phase,
+        box,
+        orbSizeDotScale(box),
+        userRotation = userRotation,
+      )
     for (dot in dots) {
       paint.color = if (dot.accent) accentColor else dotColor
       paint.alpha = (dot.a * 255).toInt().coerceIn(0, 255)
@@ -108,15 +195,63 @@ class ThinkingOrbsView(context: Context) : View(context), Choreographer.FrameCal
     }
   }
 
+  private fun syncPlayback() {
+    if (animated && !dragging) {
+      resumeIdle()
+    } else {
+      freezeIdle()
+    }
+    if ((animated || interactive) && isAttachedToWindow) {
+      start()
+    } else {
+      stop()
+    }
+  }
+
+  private fun currentIdleSeconds(): Double {
+    val since = idleRunningSinceNanos
+    return if (since == null) {
+      idleSeconds
+    } else {
+      idleSeconds + (System.nanoTime() - since) / 1_000_000_000.0
+    }
+  }
+
+  private fun freezeIdle() {
+    idleSeconds = currentIdleSeconds()
+    idleRunningSinceNanos = null
+  }
+
+  private fun resumeIdle() {
+    if (!animated || idleRunningSinceNanos != null) {
+      return
+    }
+    idleSeconds = currentIdleSeconds()
+    idleRunningSinceNanos = System.nanoTime()
+  }
+
+  private fun disallowParentIntercept() {
+    var current = parent
+    while (current != null) {
+      current.requestDisallowInterceptTouchEvent(true)
+      current = current.parent
+    }
+  }
+
   private fun start() {
     if (running) return
     running = true
-    startedAtNanos = System.nanoTime()
+    lastFrameNanos = System.nanoTime()
     Choreographer.getInstance().postFrameCallback(this)
   }
 
   private fun stop() {
     running = false
     Choreographer.getInstance().removeFrameCallback(this)
+  }
+
+  private fun recycleVelocityTracker() {
+    velocityTracker?.recycle()
+    velocityTracker = null
   }
 }
