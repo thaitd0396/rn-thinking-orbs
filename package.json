@@ -1,6 +1,6 @@
 {
   "name": "rn-thinking-orbs",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Native dotted thinking-orbs view for React Native (Metal on iOS, AGSL on Android)",
   "homepage": "https://github.com/thaitd0396/rn-thinking-orbs",
   "repository": {
