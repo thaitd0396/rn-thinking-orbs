@@ -6,13 +6,13 @@ import UIKit
 @objc(ThinkingOrbsUIView)
 public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     @objc public var accentColor: String = "#2A67F4" {
-        didSet { colorsDirty = true; renderIfVisible() }
+        didSet { updateColors() }
     }
     @objc public var dotColor: String = "#000000" {
-        didSet { colorsDirty = true; renderIfVisible() }
+        didSet { updateColors() }
     }
     @objc public var animated: Bool = true {
-        didSet { applyPlayback() }
+        didSet { updatePlayback() }
     }
     @objc public var interactive: Bool = false {
         didSet { applyInteraction() }
@@ -20,18 +20,137 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
 
     public override class var layerClass: AnyClass { CAMetalLayer.self }
 
+    private var renderer: ThinkingOrbsRenderer!
+    private let grabRecognizer = ThinkingOrbsGrabRecognizer()
+
+    public override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        renderer = ThinkingOrbsRenderer(layer: layer as! CAMetalLayer)
+        grabRecognizer.addTarget(self, action: #selector(handleGrab))
+        grabRecognizer.delegate = self
+        grabRecognizer.cancelsTouchesInView = true
+        addGestureRecognizer(grabRecognizer)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updatePlayback),
+            name: UIApplication.willResignActiveNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updatePlayback),
+            name: UIApplication.didBecomeActiveNotification, object: nil
+        )
+        applyInteraction()
+    }
+
+    public required init?(coder: NSCoder) {
+        nil
+    }
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateLayout()
+        updatePlayback()
+    }
+
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        updateLayout()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        renderer.shutdown()
+    }
+
+    private func updateLayout() {
+        let size = bounds.size
+        let scale = window?.screen.scale ?? traitCollection.displayScale
+        let fps = min(window?.screen.maximumFramesPerSecond ?? 60, 120)
+        let metalLayer = layer as! CAMetalLayer
+        if metalLayer.contentsScale != scale {
+            metalLayer.contentsScale = scale
+        }
+        let drawableSize = CGSize(width: max(size.width, 0) * scale, height: max(size.height, 0) * scale)
+        if metalLayer.drawableSize != drawableSize {
+            metalLayer.drawableSize = drawableSize
+        }
+        renderer.enqueue { $0.updateLayout(size: size, scale: scale, fps: fps) }
+    }
+
+    private func updateColors() {
+        let accent = accentColor
+        let ink = dotColor
+        renderer.enqueue { $0.updateColors(accent: accent, ink: ink) }
+    }
+
+    @objc private func updatePlayback(_ notification: Notification? = nil) {
+        let active = notification?.name != UIApplication.willResignActiveNotification
+            && UIApplication.shared.applicationState == .active
+        let visible = window != nil && active
+        let animated = animated
+        let interactive = interactive
+        renderer.enqueue { $0.updatePlayback(visible: visible, animated: animated, interactive: interactive) }
+    }
+
+    private func applyInteraction() {
+        isUserInteractionEnabled = interactive
+        grabRecognizer.isEnabled = interactive
+        updatePlayback()
+    }
+
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        gestureRecognizer === grabRecognizer
+    }
+
+    @objc private func handleGrab(_ recognizer: UIGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        let time = CACurrentMediaTime()
+        switch recognizer.state {
+        case .began:
+            renderer.enqueue { $0.grab(at: point, atTime: time) }
+        case .changed:
+            renderer.enqueue { $0.roll(to: point, atTime: time) }
+        case .ended, .cancelled:
+            renderer.enqueue { $0.releaseGrab() }
+        default:
+            break
+        }
+    }
+}
+
+private final class ThinkingOrbsRenderer {
     private let commandQueue: MTLCommandQueue
     private let computePipeline: MTLComputePipelineState
     private let renderPipeline: MTLRenderPipelineState
     private let dotsBuffers: [MTLBuffer]
     private let uniformBuffers: [MTLBuffer]
     private var bufferIndex = 0
-    private var displayLink: CADisplayLink?
+    private let renderQueue = DispatchQueue(label: "com.rnthinkingorbs.render", qos: .userInteractive)
+    private let inFlightFrames = DispatchSemaphore(value: ThinkingOrbsGPU.bufferCount)
+    private var timer: DispatchSourceTimer?
+    private let metalLayer: CAMetalLayer
+    private var bounds: CGRect = .zero
+    private var contentsScale: CGFloat = 1
+    private var visible = false
+    private var framesPerSecond = 60
+    private var animated = true
+    private var interactive = false
     private var cachedFit: Float = 1
     private var cachedFitSize: Double = -1
     private var accent = SIMD4<Float>(0.1647, 0.4039, 0.9569, 1)
     private var ink = SIMD4<Float>(0, 0, 0, 1)
-    private var colorsDirty = true
+
     private var userRotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     /// View-space spin in the same units as `rollSurface` (radians / view-width per second).
     /// Axis is always parallel to the screen: ω = (-vy, vx, 0).
@@ -45,11 +164,8 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     private var idleSeconds: CFTimeInterval = 0
     private var idleRunningSince: CFTimeInterval?
     private var touching = false
-    private let grabRecognizer = ThinkingOrbsGrabRecognizer()
 
-    private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
-
-    public override init(frame: CGRect) {
+    init(layer: CAMetalLayer) {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             preconditionFailure("Metal is required for ThinkingOrbsUIView")
         }
@@ -107,119 +223,88 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
         dotsBuffers = dots
         uniformBuffers = uniforms
 
-        super.init(frame: frame)
-        isOpaque = false
-        isUserInteractionEnabled = false
-        backgroundColor = .clear
-        grabRecognizer.addTarget(self, action: #selector(handleGrab))
-        grabRecognizer.delegate = self
-        grabRecognizer.cancelsTouchesInView = true
-        addGestureRecognizer(grabRecognizer)
-        applyInteraction()
+        metalLayer = layer
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.isOpaque = false
         metalLayer.framebufferOnly = true
-        metalLayer.contentsScale = UITraitCollection.current.displayScale
     }
 
-    public required init?(coder: NSCoder) {
-        nil
-    }
-
-    public override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if let window {
-            metalLayer.contentsScale = window.screen.scale
+    func enqueue(_ update: @escaping (ThinkingOrbsRenderer) -> Void) {
+        renderQueue.async { [self] in
+            autoreleasepool { update(self) }
         }
-        applyPlayback()
     }
 
-    public override func layoutSubviews() {
-        super.layoutSubviews()
-        let scale = metalLayer.contentsScale
-        metalLayer.drawableSize = CGSize(
-            width: max(bounds.width, 0) * scale,
-            height: max(bounds.height, 0) * scale
-        )
-        refreshFitIfNeeded()
+    func shutdown() {
+        enqueue {
+            $0.visible = false
+            $0.freezeIdle()
+            $0.stopAnimating()
+        }
+    }
+
+    func updateLayout(size: CGSize, scale: CGFloat, fps: Int) {
+        if bounds.size != size || contentsScale != scale {
+            bounds.size = size
+            contentsScale = scale
+            refreshFitIfNeeded()
+        }
+        if framesPerSecond != fps {
+            framesPerSecond = max(fps, 1)
+            stopAnimating()
+            applyPlayback()
+        }
         renderIfVisible()
     }
 
-    deinit {
-        stopAnimating()
+    func updateColors(accent: String, ink: String) {
+        self.accent = simdColor(from: accent)
+        self.ink = simdColor(from: ink)
+        renderIfVisible()
+    }
+
+    func updatePlayback(visible: Bool, animated: Bool, interactive: Bool) {
+        self.visible = visible
+        self.animated = animated
+        self.interactive = interactive
+        if !visible { touching = false }
+        applyPlayback()
     }
 
     private func renderIfVisible() {
-        if window != nil {
+        if visible, timer == nil {
             renderFrame()
         }
     }
 
     private func applyPlayback() {
         lastTickAt = CACurrentMediaTime()
-        if animated, !touching {
+        if visible, animated, !touching {
             resumeIdle()
         } else {
             freezeIdle()
         }
-        if window != nil, (animated || interactive) {
+        if visible, (animated || interactive) {
             startAnimating()
         } else {
             stopAnimating()
-            if window != nil {
-                renderFrame()
-            }
-        }
-    }
-
-    private func applyInteraction() {
-        isUserInteractionEnabled = interactive
-        grabRecognizer.isEnabled = interactive
-        applyPlayback()
-    }
-
-    public func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        false
-    }
-
-    public func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        gestureRecognizer === grabRecognizer
-    }
-
-    @objc private func handleGrab(_ recognizer: UIGestureRecognizer) {
-        let point = recognizer.location(in: self)
-        switch recognizer.state {
-        case .began:
-            grab(at: point)
-        case .changed:
-            roll(to: point)
-        case .ended, .cancelled:
-            releaseGrab()
-        default:
-            break
+            renderIfVisible()
         }
     }
 
     /// Contact is a grab: idle stops, and a stationary finger is just a pan of distance 0.
-    private func grab(at point: CGPoint) {
+    func grab(at point: CGPoint, atTime: CFTimeInterval) {
         touching = true
         velocityX = 0
         velocityY = 0
         lastTouchPoint = point
-        lastTouchAt = CACurrentMediaTime()
+        lastTouchAt = atTime
         freezeIdle()
         renderIfVisible()
     }
 
-    private func roll(to point: CGPoint) {
-        let now = CACurrentMediaTime()
+    func roll(to point: CGPoint, atTime now: CFTimeInterval) {
         let box = max(min(bounds.width, bounds.height), 1)
         let dx = Float((point.x - lastTouchPoint.x) / box)
         let dy = Float((point.y - lastTouchPoint.y) / box)
@@ -233,7 +318,7 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
         renderIfVisible()
     }
 
-    private func releaseGrab() {
+    func releaseGrab() {
         guard touching else { return }
         touching = false
         if animated {
@@ -313,23 +398,27 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func startAnimating() {
-        if displayLink != nil { return }
-        let link = CADisplayLink(target: self, selector: #selector(tick))
-        if #available(iOS 15.0, *) {
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
-        } else {
-            link.preferredFramesPerSecond = 60
+        guard timer == nil else { return }
+        let source = DispatchSource.makeTimerSource(queue: renderQueue)
+        source.schedule(
+            deadline: .now(),
+            repeating: .nanoseconds(1_000_000_000 / framesPerSecond),
+            leeway: .milliseconds(1)
+        )
+        source.setEventHandler { [weak self] in
+            autoreleasepool { self?.tick() }
         }
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        timer = source
+        source.resume()
     }
 
     private func stopAnimating() {
-        displayLink?.invalidate()
-        displayLink = nil
+        timer?.cancel()
+        timer = nil
     }
 
-    @objc private func tick() {
+    private func tick() {
+        guard visible else { return }
         let now = CACurrentMediaTime()
         let dt = Float(max(now - lastTickAt, 0))
         lastTickAt = now
@@ -347,15 +436,14 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func renderFrame() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard visible, bounds.width > 0, bounds.height > 0 else { return }
+        guard inFlightFrames.wait(timeout: .now()) == .success else { return }
+        var submitted = false
+        defer {
+            if !submitted { inFlightFrames.signal() }
+        }
         refreshFitIfNeeded()
         guard let drawable = metalLayer.nextDrawable() else { return }
-
-        if colorsDirty {
-            accent = simdColor(from: accentColor)
-            ink = simdColor(from: dotColor)
-            colorsDirty = false
-        }
 
         let box = Float(min(bounds.width, bounds.height))
         let seconds = currentIdleSeconds()
@@ -365,7 +453,7 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
             size: box,
             fit: cachedFit,
             dotScale: Float(thinkingOrbsDotScale(size: Double(box))),
-            contentsScale: Float(metalLayer.contentsScale),
+            contentsScale: Float(contentsScale),
             pad0: 0,
             viewport: SIMD2(Float(drawable.texture.width), Float(drawable.texture.height)),
             origin: SIMD2((Float(bounds.width) - box) * 0.5, (Float(bounds.height) - box) * 0.5),
@@ -377,7 +465,6 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
             ink: ink
         )
 
-        bufferIndex = (bufferIndex + 1) % ThinkingOrbsGPU.bufferCount
         let dotsBuffer = dotsBuffers[bufferIndex]
         let uniformsBuffer = uniformBuffers[bufferIndex]
         memcpy(uniformsBuffer.contents(), &uniforms, MemoryLayout<ThinkingOrbsGPUUniforms>.stride)
@@ -411,8 +498,12 @@ public final class ThinkingOrbsUIView: UIView, UIGestureRecognizerDelegate {
             )
             render.endEncoding()
         }
+        let semaphore = inFlightFrames
+        commandBuffer.addCompletedHandler { _ in semaphore.signal() }
         commandBuffer.present(drawable)
+        submitted = true
         commandBuffer.commit()
+        bufferIndex = (bufferIndex + 1) % ThinkingOrbsGPU.bufferCount
     }
 }
 

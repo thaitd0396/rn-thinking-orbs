@@ -16,6 +16,8 @@ import { ThinkingOrbsView } from "rn-thinking-orbs";
 
 Keep the native view at a fixed size (for example 120pt) and scale the wrapper in JS if the layout slot shrinks. Do not change the native canvas size during keyboard or layout animation.
 
+On iOS, rotation and Metal rendering run on a dedicated serial queue, independently of the main thread that handles keyboard transitions. Layout, prop changes, and gestures are forwarded to that queue; rendering pauses when the view leaves its window or the app becomes inactive. GPU completion gates reuse of the three frame buffers.
+
 On iOS, a Metal compute shader builds the 160-dot stripe field each frame and a fragment shader draws anti-aliased circles. On Android 13+ (API 33), an AGSL `RuntimeShader` runs the same field in a fragment shader; older APIs fall back to `Canvas`. Vulkan is the closer low-level analog to Metal, but AGSL is the path that attaches to a regular View the way `CAMetalLayer` does.
 
 Autolinks on iOS and Android. After adding the package, rebuild the native app (`pod install` / Gradle). CodePush cannot ship the native view.
